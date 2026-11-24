@@ -1,5 +1,8 @@
 # LogServerCLI
 
+[![CI](https://github.com/OpenChargingCloud/LogServerCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenChargingCloud/LogServerCLI/actions/workflows/ci.yml)
+[![Nightly](https://github.com/OpenChargingCloud/LogServerCLI/actions/workflows/nightly.yml/badge.svg)](https://github.com/OpenChargingCloud/LogServerCLI/actions/workflows/nightly.yml)
+
 One log server for charging stations: it takes the log files they upload - by
 HTTP PUT on a port of its own, and over SFTP on its SSH server - keeps each of
 them with what is known about how it came, and shows them in a web interface,
@@ -256,6 +259,8 @@ asks the name and time servers, but makes no uploaders.
 | `libs/Hermod/` | the network below all of them: HTTP, TLS, SSH, SFTP and DNS |
 | `libs/Norn/` | NTS and NTP, with which the node checks its clock |
 | `libs/Styx/`, `libs/Urdr/` | the basics below that, and time stamps (RFC 3161) |
+| `.github/workflows/` | what runs on every push, and what runs at night |
+| `.github/scripts/` | the start both of them make: the server asked for its web interface, its JSON API, SSH and an upload |
 
 
 ### Its tests
@@ -279,6 +284,17 @@ npm run typecheck
 npm run typecheck:test
 npm test
 ```
+
+**CI** runs them on every push, beside the node's own tests, on Windows and on
+Debian 13; on Debian it then starts the server and asks it: `/` must be the
+embedded web interface, the JSON API must be shut to anybody not signed in,
+SSH must answer, an upload without credentials must be refused - and an
+uploader made over the JSON API must be able to put a file by HTTP, find it
+listed and download it as it was sent. **Nightly** runs every test of every
+library at the commits pinned here - but for those that ask real name and time
+servers on the Internet - starts the server the same way, says which packages
+have known vulnerabilities, and builds and tests once more with every library
+at its newest commit, to say what advancing them would cost.
 
 
 ## Your participation
