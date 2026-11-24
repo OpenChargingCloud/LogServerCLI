@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Manual runs from the Actions tab ("Run workflow").
+  workflow_dispatch:
+
+concurrency:
+  # Pull requests: one run per branch, newest wins. Pushes: one run per commit,
+  # and nothing cancels anything - the same arrangement as NTSServerCLI, PKICLI
+  # and the other repositories of this stack.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # One leg per platform this log server is used on: Windows, where it is
+  # developed, and Debian 13, where the family is deployed - an Ubuntu runner
+  # carrying a debian:13 container, as GitHub has no Debian image. fail-fast is
+  # off, so that "red on exactly one platform" stays visible.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+
+      # Before the checkout: under the 260-character limit a submodule checkout
+      # gives up halfway with "Filename too long".
+      - name: Allow long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      # Also before the checkout: actions/checkout without git falls back to a
+      # tarball, which brings no submodules. The rest is what .NET needs on a
+      # bare Debian, xz-utils because the Node tarball is a .tar.xz, and curl,
+      # which the start below asks the server and uploads to it with.
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata xz-utils && git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.0.x'
+
+      # The web interface is built by npm and webpack from inside the .NET build
+      # - LogServer.csproj runs "npm ci" and "npm run build" and then embeds
+      # dist/ as assembly resources - so Node is not optional on either leg.
+      # 24.x: the frontend's tests are run by node itself directly on .ts
+      # files, which needs a Node new enough to strip types without being asked.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+
+      # The whole solution: "they still compile together at these gitlinks" is
+      # the one statement this repository is uniquely able to make.
+      - name: Build
+        run: dotnet build LogServerCLI.slnx --configuration Release
+
+      # What the .NET build does not cover: the type checks of the test files,
+      # and the frontend's own tests - its pages drawn against a stand-in
+      # server, and WWCP_Node's rules every page of every kind of node is held
+      # to. One leg: TypeScript does not know which platform it is on.
+      - name: The web interface (type checks and its own tests)
+        if: matrix.leg == 'debian-13-container'
+        working-directory: libs/LogServer/LogServer/Frontend
+        run: |
+          npm run typecheck
+          npm run typecheck:test
+          npm test
+
+      - name: Test the node
+        timeout-minutes: 10
+        run: dotnet test libs/WWCP_Node/WWCP_Node_Tests/WWCP_Node_Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=node-${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # The log server's own tests: the store of the uploads on its own - where
+      # a file is kept, the index read back, filtered and ordered, an upload
+      # removed - uploaders made over the JSON API uploading by HTTP PUT, who is
+      # refused, a new password and a removed uploader shutting the old
+      # credentials out - and WWCP_Node's conformance suite asked of a log
+      # server, its web interface among it. Nothing in them leaves the machine.
+      - name: Test the log server
+        timeout-minutes: 20
+        run: dotnet test libs/LogServer/LogServerTests/LogServerTests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # Does it start, and does it take uploads? The web interface, the JSON API
+      # shut to anyone not signed in, SSH, an upload without credentials
+      # refused, and an uploader made over the JSON API whose file put by HTTP
+      # is listed and downloaded as it was sent - see the script.
+      - name: The log server starts and answers (Debian)
+        if: matrix.leg == 'debian-13-container'
+        timeout-minutes: 5
+        shell: bash
+        run: .github/scripts/starts-and-answers.sh
+
+      # The smaller question on the other leg: the entry assembly loads, its
+      # arguments parse, it exits 0.
+      - name: The log server runs (Windows)
+        if: runner.os == 'Windows'
+        run: dotnet LogServerCLI/bin/Release/net11.0/LogServerCLI.dll --help
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.leg }}
+          path: artifacts/*.trx
