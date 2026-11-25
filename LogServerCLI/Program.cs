@@ -62,7 +62,8 @@ namespace cloud.charging.open.LogServer
                                    "uploads by HTTP PUT and over SFTP and keeps them in 'uploads' beside it; the \"logServer\" section " +
                                    "says otherwise - see the README.",
             CertificateKinds:      LogServerNode.CertificateKinds,
-            Synopsis:              [ "[--upload-port <n>]", "[--upload-listen <address>]", "[--uploads <directory>]", "[--no-http-uploads | --no-sftp-uploads]", "[--anonymous-uploads]" ],
+            Synopsis:              [ "[--upload-port <n>]", "[--upload-listen <address>]", "[--upload-https]", "[--upload-https-cert <file>]", "[--upload-https-key <file>]",
+                                     "[--upload-url <url>]", "[--uploads <directory>]", "[--no-http-uploads | --no-sftp-uploads]", "[--anonymous-uploads]" ],
             AfterTheWebInterface: [
                 .. NodeUsage.Wrap("The uploads - each of these says for this start what the \"logServer\" section of the " +
                                   "configuration file says for every start:",
@@ -73,6 +74,14 @@ namespace cloud.charging.open.LogServer
                                                                   "on the loopback."),
                 .. NodeUsage.Switch("--upload-listen <address>",  "the address HTTP uploads are taken on (default: \"any\", every address of both " +
                                                                   "families). Not --any, which is the web interface's - and SSH's, and so SFTP's."),
+                .. NodeUsage.Switch("--upload-https",             $"take HTTP uploads over TLS, with a certificate of the upload port's own: the certificate store's " +
+                                                                  $"TLS server identity for \"{LogServerSettings.UploadListener}\", or one told no listener. Not --https, " +
+                                                                  "which is the web interface's."),
+                .. NodeUsage.Switch("--upload-https-cert <file>", "the same with the certificate and its intermediates in a PEM file instead - certbot's fullchain.pem."),
+                .. NodeUsage.Switch("--upload-https-key <file>",  "the key that goes with it, where that is in a file of its own - certbot's privkey.pem."),
+                .. NodeUsage.Switch("--upload-url <url>",         "the URL charging stations reach the upload port at - a name rather than an address, a proxy's " +
+                                                                  "\"https\" in front - which the banner and the web interface tell them (default: guessed " +
+                                                                  "from --upload-listen, or the name of this machine)."),
                 .. NodeUsage.Switch("--uploads <directory>",      $"where the uploads are kept (default: \"{LogServerSettings.DefaultDirectory}\" beside the " +
                                                                   "configuration file)."),
                 .. NodeUsage.Switch("--no-http-uploads",          "take no uploads by HTTP PUT."),
@@ -155,6 +164,10 @@ namespace cloud.charging.open.LogServer
             var          noHTTP        = false;
             var          noSFTP        = false;
             var          anonymous     = false;
+            var          uploadHTTPS   = false;
+            String?      uploadCert    = null;
+            String?      uploadKey     = null;
+            Uri?         uploadURL     = null;
 
             var rest = arguments.Rest;
 
@@ -206,11 +219,65 @@ namespace cloud.charging.open.LogServer
                         anonymous = true;
                         break;
 
+                    case "--upload-https":
+                        uploadHTTPS = true;
+                        break;
+
+                    case "--upload-https-cert":
+                    case "--upload-https-key":
+                        var which = rest[i];
+                        if (!NodeArguments.TryTakeValue(rest, ref i, out var pemFile) || String.IsNullOrWhiteSpace(pemFile))
+                        {
+                            NodeProgram.Say(Console.Error, $"Missing PEM file after {which}!");
+                            return 2;
+                        }
+                        if (!File.Exists(pemFile))
+                        {
+                            NodeProgram.Say(Console.Error, $"{which}: there is no file '{pemFile}'.");
+                            return 2;
+                        }
+                        if (which == "--upload-https-cert")
+                            uploadCert = Path.GetFullPath(pemFile);
+                        else
+                            uploadKey  = Path.GetFullPath(pemFile);
+                        break;
+
+                    case "--upload-url":
+                        if (!NodeArguments.TryTakeValue(rest, ref i, out var urlText) ||
+                            !LogServerSettings.TryParsePublicURL(urlText, out uploadURL, out var urlError))
+                        {
+                            NodeProgram.Say(Console.Error, $"Missing or invalid URL after --upload-url, as \"https://logs.example.org:8363/\"!");
+                            return 2;
+                        }
+                        break;
+
                     default:
                         return NodeArguments.Unknown(rest[i], Usage);
 
                 }
             }
+
+            if (uploadHTTPS && uploadCert is not null)
+            {
+                NodeProgram.Say(Console.Error, "--upload-https shows the certificate store's identity and --upload-https-cert the one in a file: give one of them.");
+                return 2;
+            }
+
+            if (uploadKey is not null && uploadCert is null)
+            {
+                NodeProgram.Say(Console.Error, "--upload-https-key is the key of the certificate --upload-https-cert names: give that as well.");
+                return 2;
+            }
+
+            if (uploadCert is not null && uploadKey is null && !File.ReadAllText(uploadCert).Contains("PRIVATE KEY", StringComparison.Ordinal))
+            {
+                NodeProgram.Say(Console.Error, $"--upload-https-cert: '{uploadCert}' holds no private key. Give the file of its key with --upload-https-key.");
+                return 2;
+            }
+
+            var uploadTLS = uploadHTTPS        ? new WebTLSConfiguration(WebCertificateSource.Store)
+                          : uploadCert is not null ? new WebTLSConfiguration(new WebCertificateSource(uploadCert, uploadKey))
+                          : null;
 
             var root = NodeProgram.RepositoryRoot("LogServerCLI.slnx");
 
@@ -240,6 +307,8 @@ namespace cloud.charging.open.LogServer
                            CommandLine:       settings => settings with {
                                                   HTTPPort       = uploadPort   ?? settings.HTTPPort,
                                                   HTTPListen     = uploadListen ?? settings.HTTPListen,
+                                                  TLS            = uploadTLS    ?? settings.TLS,
+                                                  PublicURL      = uploadURL    ?? settings.PublicURL,
                                                   Directory      = uploads      ?? settings.Directory,
                                                   HTTP           = !noHTTP && settings.HTTP,
                                                   SFTP           = !noSFTP && settings.SFTP,

@@ -69,6 +69,10 @@ says for every start:
 |---|---|
 | `--upload-port <n>` | the TCP port HTTP uploads are taken on (8363) |
 | `--upload-listen <address>` | where HTTP uploads are taken (`any`, every address of both families) |
+| `--upload-https` | HTTP uploads over TLS, with the certificate store's identity for the listener `upload` |
+| `--upload-https-cert <file>` | the same with a certificate in a PEM file - certbot's `fullchain.pem` |
+| `--upload-https-key <file>` | its key, where that is a file of its own - certbot's `privkey.pem` |
+| `--upload-url <url>` | the URL charging stations reach the upload port at (guessed where not given) |
 | `--uploads <directory>` | where the uploads are kept (`uploads` beside the configuration file) |
 | `--no-http-uploads` | no uploads by HTTP PUT |
 | `--no-sftp-uploads` | no uploads over SFTP |
@@ -118,13 +122,35 @@ curl -u CS001:<password> -T diagnostics.zip http://127.0.0.1:8363/CS001/diagnost
 
 It answers `201 Created` with the upload's metadata; `401` without
 credentials (or with wrong ones), `403` for an account that is no uploader,
-`413` for a file larger than `maxFileSize`. Nothing else is served on that
-port.
+`413` for a file larger than `maxFileSize`, `408` for one that takes longer
+than `httpUploadTimeout`. Nothing else is served on that port.
+
+The body is written to the disk as it arrives - with a `Content-Length` or in
+chunks - and never held in memory: an upload costs one buffer of 80 KiB,
+however large the file. It lies in `.http-incoming` below the uploads until
+its last byte is there, and is then moved into the store; one that is refused
+or breaks off leaves nothing behind, and what one left when the log server
+stopped is taken away at its next start.
+
+The upload port is an HTTP server of its own, and has a certificate of its
+own: `"logServer": { "tls": ... }` - or `--upload-https` - and not the web
+interface's `web.tls`, so that either may speak TLS without the other, and
+each under the name it is reached by. As `web.tls`, it is
+`{ "certificate": "store" }` - the certificate store's TLS server identity for
+the listener `upload`, or one told no listener; an identity told `web` only is
+never shown here - or `{ "certificate": { "fullchain": "<file>", "privateKey":
+"<file>" } }`, read again whenever the files change. With nothing to show, a
+connection is refused rather than served in the clear.
 
 Over plain HTTP the file and the password cross the network in the clear, and
-the log server says so at every start. Where the web interface speaks TLS -
-`"web": { "tls": ... }`, or `--https` - the upload port shows the same
-certificate; otherwise put a proxy that speaks TLS in front.
+the log server says so at every start - unless `publicURL` says `https`, which
+means a proxy in front speaks TLS.
+
+The URL the banner, the prompt and the web interface tell charging stations
+is `publicURL` - `"https://logs.example.org:8363/"`, or a proxy's, a path
+below it included - or `--upload-url`; where neither says it, it is guessed:
+the address the port listens on, or the name of this machine where it listens
+on every address, and the log says so.
 
 
 ### Uploading over SFTP
@@ -158,19 +184,29 @@ section of the log server, with every key and its default:
 ```json
 {
   "logServer": {
-    "directory":      "uploads",
-    "http":           true,
-    "httpListen":     "any",
-    "httpPort":       8363,
-    "anonymousHTTP":  false,
-    "sftp":           true,
-    "maxFileSize":    104857600
+    "directory":          "uploads",
+    "http":               true,
+    "httpListen":         "any",
+    "httpPort":           8363,
+    "tls":                null,
+    "publicURL":          null,
+    "httpUploadTimeout":  3600,
+    "anonymousHTTP":      false,
+    "sftp":               true,
+    "maxFileSize":        104857600
   },
   "ssh": {
-    "passwords":      true
+    "passwords":          true
   }
 }
 ```
+
+`tls` is `{ "certificate": "store" }` or `{ "certificate": { "fullchain":
+"<file>", "privateKey": "<file>" } }` for HTTPS on the upload port, paths
+beside the configuration file; `publicURL` the URL charging stations are told;
+`httpUploadTimeout` how many seconds one HTTP upload may take from its first
+byte to its last (an hour; at most a day); `maxFileSize` at most 2147483647
+bytes, Hermod's largest request body.
 
 SFTP is served by default on a log server; `"ssh": { "sftp": false }` switches
 it off for the whole node.
@@ -213,7 +249,8 @@ three pages of its own:
   its SHA-256, where it is kept, its Content-Type and User-Agent. Each to view
   as text, to download, and to remove. A new upload appears as it arrives.
 * **Log server** - how uploads are taken, the URL a charging station is
-  given, the `curl` and `sftp` lines to try it with, and what is kept.
+  given and where the port listens, the certificate the upload port shows,
+  the `curl` and `sftp` lines to try it with, and what is kept.
 * **Uploaders** - the accounts in the uploader role, how many uploads each
   made and when last; made with a form, given a new password, taken away.
 
@@ -277,7 +314,11 @@ dotnet test libs/LogServer/LogServerTests/LogServerTests.csproj
 
 The store on its own - where a file is kept, the index read back to the
 millisecond, filtered and ordered, an upload removed - what an SFTP upload
-left unfinished taken away at the start, and a log server
+left unfinished taken away at the start; the upload port on its own: 64 MiB
+put with a Content-Length and in chunks kept whole for far less memory than
+they are large, an upload too large or too slow refused without a trace, a
+certificate of its own shown while the web interface speaks plain HTTP, the
+URL charging stations are told; and a log server
 started on the loopback address: an uploader made over the JSON API uploads by
 HTTP PUT, its uploads listed, filtered and downloaded; an upload without
 credentials or by an account that is no uploader refused; an operator may read
