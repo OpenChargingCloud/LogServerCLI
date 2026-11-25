@@ -308,6 +308,7 @@ asks the name and time servers, but makes no uploaders.
 | `libs/Hermod/` | the network below all of them: HTTP, TLS, SSH, SFTP and DNS |
 | `libs/Norn/` | NTS and NTP, with which the node checks its clock |
 | `libs/Styx/`, `libs/Urdr/` | the basics below that, and time stamps (RFC 3161) |
+| `docs/` | the picture this README begins with: the EV charging test environment, the log server in it |
 | `.github/workflows/` | what runs on every push, and what runs at night |
 | `.github/scripts/` | the start both of them make: the server asked for its web interface, its JSON API, SSH and an upload |
 
