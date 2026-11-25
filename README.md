@@ -211,6 +211,10 @@ bytes, Hermod's largest request body.
 SFTP is served by default on a log server; `"ssh": { "sftp": false }` switches
 it off for the whole node.
 
+The web interface's port is not the upload port, and has a time of its own
+for the body of one request: `"web": { "requestBodyTimeout": <seconds> }`,
+five minutes where it is not said (WWCP_Node's; Hermod's 30 seconds before).
+
 
 ### Where the uploads are kept
 
