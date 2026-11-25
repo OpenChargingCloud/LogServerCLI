@@ -143,6 +143,12 @@ Every file put in `/upload` is taken into the store at once, so that the next
 one of the same name never takes its place. The charging station of an SFTP
 upload is the uploader it signed in as.
 
+A file put under `<name>.part` is not done yet: as the white paper "SFTP for
+Logfile Uploads and Firmware Downloads" has it, a station uploads under that
+name and renames it to `<name>` after the last byte - and that rename is what
+is taken in. What an upload left under `.part` and never renamed is taken
+away when the log server starts, and while it runs once it is a day old.
+
 
 ### The configuration
 
@@ -270,7 +276,8 @@ dotnet test libs/LogServer/LogServerTests/LogServerTests.csproj
 ```
 
 The store on its own - where a file is kept, the index read back to the
-millisecond, filtered and ordered, an upload removed - and a log server
+millisecond, filtered and ordered, an upload removed - what an SFTP upload
+left unfinished taken away at the start, and a log server
 started on the loopback address: an uploader made over the JSON API uploads by
 HTTP PUT, its uploads listed, filtered and downloaded; an upload without
 credentials or by an account that is no uploader refused; an operator may read
